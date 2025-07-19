@@ -2,15 +2,16 @@
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 import google.generativeai as genai
+import google.cloud.speech as speech
+from google.oauth2 import service_account
+import json
 import os
 from gtts import gTTS
 import av
 import numpy as np
 import time
 import uuid
-import google.cloud.speech as speech
-from google.oauth2 import service_account
-import json
+
 
 # --- CẤU HÌNH BAN ĐẦU ---
 st.set_page_config(page_title="Trợ lý ảo", page_icon="🤖")
