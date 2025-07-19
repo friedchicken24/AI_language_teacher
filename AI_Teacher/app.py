@@ -10,7 +10,6 @@ import uuid
 import queue
 from io import BytesIO
 import wave
-import librosa # Thêm thư viện này
 
 # --- CẤU HÌNH BAN ĐẦU ---
 st.set_page_config(page_title="Trợ lý ảo", page_icon="🤖", layout="wide")
@@ -21,11 +20,10 @@ try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
     aai.settings.api_key = st.secrets["ASSEMBLYAI_API_KEY"]
 except KeyError as e:
-    st.error(f"⚠️ Không tìm thấy API Key: {e}. Vui lòng kiểm tra lại Secrets.")
+    st.error(f"⚠️ Không tìm thấy API Key: {e}. Vui lòng kiểm tra lại mục 'Secrets' trên Streamlit Cloud.")
     st.stop()
 
 # --- CÁC HÀM TIỆN ÍCH ---
-# (Các hàm get_ai_response và text_to_speech giữ nguyên)
 def text_to_speech(text, lang='vi'):
     try:
         tts = gTTS(text=text, lang=lang, slow=False)
@@ -64,7 +62,6 @@ def get_ai_response(user_text, conversation_history, system_prompt):
     except Exception as e:
         st.error(f"Lỗi khi gọi Gemini: {e}")
         return "Tôi xin lỗi, tôi đang gặp sự cố với bộ não của mình."
-
 
 # --- GIAO DIỆN VÀ LOGIC ---
 with st.sidebar:
@@ -109,7 +106,7 @@ with col1:
         st.session_state.audio_buffer.put(frame.to_ndarray())
 
     webrtc_ctx = webrtc_streamer(
-        key="recorder", # Đã sửa lại key
+        key="recorder",
         mode=WebRtcMode.SENDONLY,
         audio_frame_callback=audio_frame_callback,
         media_stream_constraints={"video": False, "audio": True},
@@ -130,42 +127,48 @@ with col2:
             else:
                 st.info("Đã nhận được âm thanh. Đang xử lý...")
                 
-                # --- PHẦN RESAMPLE ÂM THANH ---
-                sound_chunk = np.concatenate(frames, axis=1).flatten()
-                original_sr = 48000
-                target_sr = 16000
-                
-                resampled_audio = librosa.resample(y=sound_chunk.astype(np.float32), orig_sr=original_sr, target_sr=target_sr)
-                resampled_audio_int16 = (resampled_audio * 32767).astype(np.int16)
-                
-                wav_buffer = BytesIO()
-                with wave.open(wav_buffer, "wb") as wf:
-                    wf.setnchannels(1)
-                    wf.setsampwidth(2)
-                    wf.setframerate(target_sr) # Dùng tần số mới
-                    wf.writeframes(resampled_audio_int16.tobytes())
-                
-                wav_bytes = wav_buffer.getvalue()
+                # --- RESAMPLE ÂM THANH BẰNG "AV" ---
+                resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
+                resampled_frames = []
+                for frame_ndarray in frames:
+                    frame = av.AudioFrame.from_ndarray(frame_ndarray, format='s16', layout='mono')
+                    frame.sample_rate = 48000
+                    for resampled_frame in resampler.resample(frame):
+                        resampled_frames.append(resampled_frame.to_ndarray())
 
-                # ---- BẮT ĐẦU LUỒNG XỬ LÝ ----
-                with st.spinner("AI đang lắng nghe..."):
-                    user_text = speech_to_text(wav_bytes)
-
-                if user_text:
-                    st.session_state.conversation.append({"role": "user", "content": user_text})
-                    with st.spinner("AI đang suy nghĩ..."):
-                        ai_response_text = get_ai_response(user_text, st.session_state.conversation, system_prompt)
-                    
-                    st.session_state.conversation.append({"role": "assistant", "content": ai_response_text})
-                    
-                    with st.spinner("AI đang chuẩn bị nói..."):
-                        audio_file = text_to_speech(ai_response_text)
-                    
-                    if audio_file:
-                        st.session_state.last_response_audio = audio_file
-                    
-                    st.rerun()
+                if not resampled_frames:
+                    st.error("Lỗi trong quá trình resample âm thanh.")
                 else:
-                    st.error("Không nhận diện được giọng nói. Hãy thử nói to và rõ hơn.")
+                    sound_chunk = np.concatenate(resampled_frames, axis=1)
+                    
+                    wav_buffer = BytesIO()
+                    with wave.open(wav_buffer, "wb") as wf:
+                        wf.setnchannels(1)
+                        wf.setsampwidth(2)
+                        wf.setframerate(16000)
+                        wf.writeframes(sound_chunk.tobytes())
+                    
+                    wav_bytes = wav_buffer.getvalue()
+
+                    # ---- BẮT ĐẦU LUỒNG XỬ LÝ ----
+                    with st.spinner("AI đang lắng nghe..."):
+                        user_text = speech_to_text(wav_bytes)
+
+                    if user_text:
+                        st.session_state.conversation.append({"role": "user", "content": user_text})
+                        with st.spinner("AI đang suy nghĩ..."):
+                            ai_response_text = get_ai_response(user_text, st.session_state.conversation, system_prompt)
+                        
+                        st.session_state.conversation.append({"role": "assistant", "content": ai_response_text})
+                        
+                        with st.spinner("AI đang chuẩn bị nói..."):
+                            audio_file = text_to_speech(ai_response_text)
+                        
+                        if audio_file:
+                            st.session_state.last_response_audio = audio_file
+                        
+                        st.rerun()
+                    else:
+                        st.error("Không nhận diện được giọng nói. Hãy thử nói to và rõ hơn.")
     else:
         st.info("Nhấn 'Start' trên khung đen để cấp quyền và bắt đầu ghi âm.")
