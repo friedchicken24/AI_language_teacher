@@ -10,6 +10,7 @@ import uuid
 import queue
 from io import BytesIO
 import wave
+import librosa # Thêm thư viện này
 
 # --- CẤU HÌNH BAN ĐẦU ---
 st.set_page_config(page_title="Trợ lý ảo", page_icon="🤖", layout="wide")
@@ -23,7 +24,8 @@ except KeyError as e:
     st.error(f"⚠️ Không tìm thấy API Key: {e}. Vui lòng kiểm tra lại Secrets.")
     st.stop()
 
-# --- CÁC HÀM TIỆN ÍCH (Không thay đổi) ---
+# --- CÁC HÀM TIỆN ÍCH ---
+# (Các hàm get_ai_response và text_to_speech giữ nguyên)
 def text_to_speech(text, lang='vi'):
     try:
         tts = gTTS(text=text, lang=lang, slow=False)
@@ -63,13 +65,14 @@ def get_ai_response(user_text, conversation_history, system_prompt):
         st.error(f"Lỗi khi gọi Gemini: {e}")
         return "Tôi xin lỗi, tôi đang gặp sự cố với bộ não của mình."
 
+
 # --- GIAO DIỆN VÀ LOGIC ---
 with st.sidebar:
     st.title("Tùy Chọn Trợ Lý Ảo")
     personas = {
-        "Trợ lý thân thiện": "Bạn là một trợ lý ảo tên là Zen...",
-        "Nhà sử học uyên bác": "Bạn là một nhà sử học uyên bác...",
-        "Chuyên gia công nghệ": "Bạn là một chuyên gia công nghệ hàng đầu..."
+        "Trợ lý thân thiện": "Bạn là một trợ lý ảo tên là Zen, rất thân thiện, tích cực và luôn sẵn lòng giúp đỡ. Hãy trả lời bằng tiếng Việt.",
+        "Nhà sử học uyên bác": "Bạn là một nhà sử học uyên bác. Hãy trả lời mọi câu hỏi với giọng điệu trang trọng, đưa ra các chi tiết và bối cảnh lịch sử thú vị. Hãy trả lời bằng tiếng Việt.",
+        "Chuyên gia công nghệ": "Bạn là một chuyên gia công nghệ hàng đầu. Hãy giải thích các khái niệm phức tạp một cách đơn giản, đưa ra các ví dụ thực tế và luôn cập nhật các xu hướng mới nhất. Hãy trả lời bằng tiếng Việt."
     }
     selected_persona_name = st.selectbox("Chọn một vai trò:", options=list(personas.keys()))
     system_prompt = personas[selected_persona_name]
@@ -102,12 +105,11 @@ col1, col2 = st.columns([1, 1])
 
 with col1:
     st.subheader("Bảng điều khiển")
-    # Sử dụng callback để ghi âm
     def audio_frame_callback(frame: av.AudioFrame):
         st.session_state.audio_buffer.put(frame.to_ndarray())
 
     webrtc_ctx = webrtc_streamer(
-        key="recorder",
+        key="recorder", # Đã sửa lại key
         mode=WebRtcMode.SENDONLY,
         audio_frame_callback=audio_frame_callback,
         media_stream_constraints={"video": False, "audio": True},
@@ -119,7 +121,6 @@ with col2:
     if webrtc_ctx.state.playing:
         st.success("🔴 Micro đang bật. Hãy nói đi!")
         if st.button("Dừng và gửi"):
-            # Lấy dữ liệu từ queue
             frames = []
             while not st.session_state.audio_buffer.empty():
                 frames.append(st.session_state.audio_buffer.get())
@@ -129,16 +130,20 @@ with col2:
             else:
                 st.info("Đã nhận được âm thanh. Đang xử lý...")
                 
-                # Ghép các frame và tạo file wav trong bộ nhớ
-                sound_chunk = np.concatenate(frames, axis=1)
-                sound_chunk = (sound_chunk * 32767).astype(np.int16)
+                # --- PHẦN RESAMPLE ÂM THANH ---
+                sound_chunk = np.concatenate(frames, axis=1).flatten()
+                original_sr = 48000
+                target_sr = 16000
+                
+                resampled_audio = librosa.resample(y=sound_chunk.astype(np.float32), orig_sr=original_sr, target_sr=target_sr)
+                resampled_audio_int16 = (resampled_audio * 32767).astype(np.int16)
                 
                 wav_buffer = BytesIO()
                 with wave.open(wav_buffer, "wb") as wf:
                     wf.setnchannels(1)
                     wf.setsampwidth(2)
-                    wf.setframerate(48000)
-                    wf.writeframes(sound_chunk.tobytes())
+                    wf.setframerate(target_sr) # Dùng tần số mới
+                    wf.writeframes(resampled_audio_int16.tobytes())
                 
                 wav_bytes = wav_buffer.getvalue()
 
