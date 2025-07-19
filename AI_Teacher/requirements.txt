@@ -1,7 +1,9 @@
-streamlit
-streamlit-webrtc
+streamlit==1.33.0
+streamlit-webrtc==0.47.6
 google-generativeai
 assemblyai
 gTTS
-av
-numpy
+# Bộ ba thư viện nền phải đi cùng nhau
+av==11.0.0
+aiortc==1.6.0
+numpy<1.27.0,>=1.26.0
