@@ -8,11 +8,16 @@ import av
 import numpy as np
 import time
 import uuid
+import google.cloud.speech as speech
+from google.oauth2 import service_account
+import json
 
 # --- CẤU HÌNH BAN ĐẦU ---
 st.set_page_config(page_title="Trợ lý ảo", page_icon="🤖")
 st.title("🤖 Trợ Lý Ảo Thông Minh")
 st.write("Nói chuyện với tôi nhé! Tôi đang lắng nghe...")
+
+
 
 # Lấy API key
 try:
@@ -20,6 +25,7 @@ try:
 except KeyError:
     st.error("⚠️ Vui lòng thêm GOOGLE_API_KEY vào Secrets của ứng dụng.")
     st.stop()
+    
 
 # --- LỚP XỬ LÝ ÂM THANH ---
 class AudioRecorder(AudioProcessorBase):
@@ -36,6 +42,16 @@ class AudioRecorder(AudioProcessorBase):
     def clear_frames(self):
         self._frames = []
 
+# Cấu hình client cho Google Cloud Speech-to-Text từ secrets
+try:
+    creds_json_str = st.secrets["GOOGLE_CREDENTIALS"]
+    creds_dict = json.loads(creds_json_str)
+    credentials = service_account.Credentials.from_service_account_info(creds_dict)
+    speech_client = speech.SpeechClient(credentials=credentials)
+except (KeyError, json.JSONDecodeError) as e:
+    st.error(f"⚠️ Lỗi cấu hình Google Cloud Speech API: {e}. Vui lòng kiểm tra GOOGLE_CREDENTIALS trong Secrets.")
+    st.stop()
+
 # --- CÁC HÀM TIỆN ÍCH ---
 def text_to_speech(text, lang='vi'):
     try:
@@ -50,31 +66,28 @@ def text_to_speech(text, lang='vi'):
 
 def speech_to_text(audio_data, sample_rate):
     try:
-        # Lưu file wav tạm thời
-        output_filename = f"input_{uuid.uuid4()}.wav"
+        # Kết hợp các frame âm thanh
         sound_chunk = np.concatenate(audio_data, axis=1)
-        # Viết header cho file WAV
-        with open(output_filename, "wb") as f:
-            f.write(b"RIFF")
-            f.write(b"\x00\x00\x00\x00")
-            f.write(b"WAVE")
-            f.write(b"fmt ")
-            f.write(b"\x10\x00\x00\x00")
-            f.write(b"\x01\x00\x01\x00")
-            f.write(sample_rate.to_bytes(4, "little"))
-            f.write((sample_rate * 2).to_bytes(4, "little"))
-            f.write(b"\x02\x00\x10\x00")
-            f.write(b"data")
-            f.write(len(sound_chunk.tobytes()).to_bytes(4, "little"))
-            f.write(sound_chunk.tobytes())
+        audio_bytes = sound_chunk.tobytes()
+
+        # Tạo đối tượng audio và config cho Google API
+        audio = speech.RecognitionAudio(content=audio_bytes)
+        config = speech.RecognitionConfig(
+            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+            sample_rate_hertz=sample_rate,
+            language_code="vi-VN"  # Chỉ định tiếng Việt
+        )
+
+        # Gửi yêu cầu đến Google
+        st.info("Đang gửi đến Google Speech API...")
+        response = speech_client.recognize(config=config, audio=audio)
         
-        # Gửi đến Whisper
-        with open(output_filename, "rb") as audio_file:
-            transcript = openai.audio.transcriptions.create(model="whisper-1", file=audio_file)
-        os.remove(output_filename) # Xóa file tạm
-        return transcript.text
+        if response.results:
+            return response.results[0].alternatives[0].transcript
+        else:
+            return None
     except Exception as e:
-        st.error(f"Lỗi khi nhận diện giọng nói: {e}")
+        st.error(f"Lỗi khi nhận diện giọng nói qua Google: {e}")
         return None
         
 def get_ai_response(user_text, conversation_history):
