@@ -1,9 +1,6 @@
-streamlit==1.33.0
-streamlit-webrtc==0.47.6
+streamlit
 google-generativeai
 assemblyai
 gTTS
-av==11.0.0
-aiortc==1.6.0
-numpy<1.27.0,>=1.26.0
-
+numpy
+librosa
