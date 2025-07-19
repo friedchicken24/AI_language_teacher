@@ -82,7 +82,7 @@ def get_ai_response(user_text, conversation_history):
     # Khởi tạo model Gemini
     model = genai.GenerativeModel('gemini-1.5-flash-latest') # Dùng bản Flash cho tốc độ nhanh
     
-     gemini_history = []
+    gemini_history = []
     for entry in conversation_history:
         # Gemini dùng 'model' cho vai trò của AI
         role = 'model' if entry['role'] == 'assistant' else entry['role']
