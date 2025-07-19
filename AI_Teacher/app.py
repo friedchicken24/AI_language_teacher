@@ -1,26 +1,24 @@
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 import google.generativeai as genai
 import assemblyai as aai
 import os
 from gtts import gTTS
-import av
-import numpy as np
 import uuid
-import queue
 from io import BytesIO
-import wave
+import librosa
+import numpy as np
+import soundfile as sf
 
 # --- CẤU HÌNH BAN ĐẦU ---
 st.set_page_config(page_title="Trợ lý ảo", page_icon="🤖", layout="wide")
 st.title("🤖 Trợ Lý Ảo Thông Minh")
 
-# --- CẤU HÌNH API KEYS VÀ CLIENTS ---
+# --- CẤU HÌNH API KEYS ---
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
     aai.settings.api_key = st.secrets["ASSEMBLYAI_API_KEY"]
 except KeyError as e:
-    st.error(f"⚠️ Không tìm thấy API Key: {e}. Vui lòng kiểm tra lại mục 'Secrets' trên Streamlit Cloud.")
+    st.error(f"⚠️ Không tìm thấy API Key: {e}. Vui lòng kiểm tra lại mục 'Secrets'.")
     st.stop()
 
 # --- CÁC HÀM TIỆN ÍCH ---
@@ -63,15 +61,15 @@ def get_ai_response(user_text, conversation_history, system_prompt):
         st.error(f"Lỗi khi gọi Gemini: {e}")
         return "Tôi xin lỗi, tôi đang gặp sự cố với bộ não của mình."
 
-# --- GIAO DIỆN VÀ LOGIC ---
+# --- GIAO DIỆN ---
 with st.sidebar:
     st.title("Tùy Chọn Trợ Lý Ảo")
     personas = {
-        "Trợ lý thân thiện": "Bạn là một trợ lý ảo tên là Zen, rất thân thiện, tích cực và luôn sẵn lòng giúp đỡ. Hãy trả lời bằng tiếng Việt.",
-        "Nhà sử học uyên bác": "Bạn là một nhà sử học uyên bác. Hãy trả lời mọi câu hỏi với giọng điệu trang trọng, đưa ra các chi tiết và bối cảnh lịch sử thú vị. Hãy trả lời bằng tiếng Việt.",
-        "Chuyên gia công nghệ": "Bạn là một chuyên gia công nghệ hàng đầu. Hãy giải thích các khái niệm phức tạp một cách đơn giản, đưa ra các ví dụ thực tế và luôn cập nhật các xu hướng mới nhất. Hãy trả lời bằng tiếng Việt."
+        "Trợ lý thân thiện": "Bạn là một trợ lý ảo tên là Zen...",
+        "Nhà sử học uyên bác": "Bạn là một nhà sử học uyên bác...",
+        "Chuyên gia công nghệ": "Bạn là một chuyên gia công nghệ hàng đầu..."
     }
-    selected_persona_name = st.selectbox("Chọn một vai trò:", options=list(personas.keys()))
+    selected_persona_name = st.selectbox("Chọn vai trò:", options=list(personas.keys()))
     system_prompt = personas[selected_persona_name]
 
 # Khởi tạo session state
@@ -79,11 +77,9 @@ if "conversation" not in st.session_state:
     st.session_state.conversation = []
 if "last_response_audio" not in st.session_state:
     st.session_state.last_response_audio = None
-if "audio_buffer" not in st.session_state:
-    st.session_state.audio_buffer = queue.Queue()
 
 # Hiển thị lịch sử trò chuyện
-chat_container = st.container()
+chat_container = st.container(height=400)
 with chat_container:
     for entry in st.session_state.conversation:
         with st.chat_message(entry["role"]):
@@ -96,79 +92,48 @@ if st.session_state.last_response_audio:
         os.remove(st.session_state.last_response_audio)
     st.session_state.last_response_audio = None
 
-# Component ghi âm
-st.write("---")
-col1, col2 = st.columns([1, 1])
+# --- KHU VỰC TẢI FILE LÊN ---
+st.divider()
+st.subheader("Trò chuyện với AI")
+st.write("Ghi âm một câu hỏi bằng điện thoại hoặc máy tính, sau đó tải file lên đây.")
 
-with col1:
-    st.subheader("Bảng điều khiển")
-    def audio_frame_callback(frame: av.AudioFrame):
-        st.session_state.audio_buffer.put(frame.to_ndarray())
+uploaded_file = st.file_uploader("Tải file âm thanh của bạn (MP3, WAV, M4A)...", type=['mp3', 'wav', 'm4a'])
 
-    webrtc_ctx = webrtc_streamer(
-        key="recorder",
-        mode=WebRtcMode.SENDONLY,
-        audio_frame_callback=audio_frame_callback,
-        media_stream_constraints={"video": False, "audio": True},
-        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
-    )
+if uploaded_file is not None:
+    st.audio(uploaded_file, format='audio/wav')
+    
+    if st.button("Gửi âm thanh để AI xử lý"):
+        with st.spinner("Đang xử lý âm thanh của bạn..."):
+            # Đọc file người dùng tải lên
+            audio_bytes = uploaded_file.getvalue()
+            
+            # Lưu vào bộ nhớ để librosa đọc
+            audio_buffer = BytesIO(audio_bytes)
+            
+            # Resample âm thanh về 16kHz
+            y, sr = librosa.load(audio_buffer, sr=None)
+            target_sr = 16000
+            if sr != target_sr:
+                y = librosa.resample(y=y, orig_sr=sr, target_sr=target_sr)
+            
+            # Chuyển đổi lại thành bytes định dạng WAV
+            wav_processed_buffer = BytesIO()
+            sf.write(wav_processed_buffer, y, target_sr, format='WAV', subtype='PCM_16')
+            wav_bytes_processed = wav_processed_buffer.getvalue()
 
-with col2:
-    st.subheader("Trạng thái")
-    if webrtc_ctx.state.playing:
-        st.success("🔴 Micro đang bật. Hãy nói đi!")
-        if st.button("Dừng và gửi"):
-            frames = []
-            while not st.session_state.audio_buffer.empty():
-                frames.append(st.session_state.audio_buffer.get())
+        # ---- BẮT ĐẦU LUỒNG XỬ LÝ ----
+        with st.spinner("AI đang lắng nghe..."):
+            user_text = speech_to_text(wav_bytes_processed)
 
-            if not frames:
-                st.warning("Không có âm thanh nào được ghi lại. Vui lòng nói gần micro hơn.")
-            else:
-                st.info("Đã nhận được âm thanh. Đang xử lý...")
-                
-                # --- RESAMPLE ÂM THANH BẰNG "AV" ---
-                resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
-                resampled_frames = []
-                for frame_ndarray in frames:
-                    frame = av.AudioFrame.from_ndarray(frame_ndarray, format='s16', layout='mono')
-                    frame.sample_rate = 48000
-                    for resampled_frame in resampler.resample(frame):
-                        resampled_frames.append(resampled_frame.to_ndarray())
-
-                if not resampled_frames:
-                    st.error("Lỗi trong quá trình resample âm thanh.")
-                else:
-                    sound_chunk = np.concatenate(resampled_frames, axis=1)
-                    
-                    wav_buffer = BytesIO()
-                    with wave.open(wav_buffer, "wb") as wf:
-                        wf.setnchannels(1)
-                        wf.setsampwidth(2)
-                        wf.setframerate(16000)
-                        wf.writeframes(sound_chunk.tobytes())
-                    
-                    wav_bytes = wav_buffer.getvalue()
-
-                    # ---- BẮT ĐẦU LUỒNG XỬ LÝ ----
-                    with st.spinner("AI đang lắng nghe..."):
-                        user_text = speech_to_text(wav_bytes)
-
-                    if user_text:
-                        st.session_state.conversation.append({"role": "user", "content": user_text})
-                        with st.spinner("AI đang suy nghĩ..."):
-                            ai_response_text = get_ai_response(user_text, st.session_state.conversation, system_prompt)
-                        
-                        st.session_state.conversation.append({"role": "assistant", "content": ai_response_text})
-                        
-                        with st.spinner("AI đang chuẩn bị nói..."):
-                            audio_file = text_to_speech(ai_response_text)
-                        
-                        if audio_file:
-                            st.session_state.last_response_audio = audio_file
-                        
-                        st.rerun()
-                    else:
-                        st.error("Không nhận diện được giọng nói. Hãy thử nói to và rõ hơn.")
-    else:
-        st.info("Nhấn 'Start' trên khung đen để cấp quyền và bắt đầu ghi âm.")
+        if user_text:
+            st.session_state.conversation.append({"role": "user", "content": user_text})
+            with st.spinner("AI đang suy nghĩ..."):
+                ai_response_text = get_ai_response(user_text, st.session_state.conversation, system_prompt)
+            st.session_state.conversation.append({"role": "assistant", "content": ai_response_text})
+            with st.spinner("AI đang chuẩn bị nói..."):
+                audio_file = text_to_speech(ai_response_text)
+            if audio_file:
+                st.session_state.last_response_audio = audio_file
+            st.rerun()
+        else:
+            st.error("Không nhận diện được giọng nói. Hãy thử ghi âm lại rõ hơn.")
