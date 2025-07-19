@@ -4,4 +4,4 @@ google-generativeai
 gTTS
 av
 numpy
-google-cloud-speech
+assemblyai
