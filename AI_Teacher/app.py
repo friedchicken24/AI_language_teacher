@@ -16,8 +16,7 @@ st.write("Nói chuyện với tôi nhé! Tôi đang lắng nghe...")
 
 # Lấy API key
 try:
-    # Thay đổi tên secret để phù hợp với Google
-    genai.configure(api_key=st.secrets["AIzaSyBK0odFXfU4KyBqaqFV9ioV15_5pjC3_3k"])
+    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"]) 
 except KeyError:
     st.error("⚠️ Vui lòng thêm GOOGLE_API_KEY vào Secrets của ứng dụng.")
     st.stop()
