@@ -3,7 +3,9 @@ streamlit-webrtc==0.47.6
 google-generativeai
 assemblyai
 gTTS
-# Bộ ba thư viện nền phải đi cùng nhau
+# Bộ thư viện nền phải đi cùng nhau
 av==11.0.0
 aiortc==1.6.0
+aioice==0.9.1
 numpy<1.27.0,>=1.26.0
+librosa
