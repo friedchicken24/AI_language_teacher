@@ -131,19 +131,31 @@ for entry in st.session_state.conversation:
     with st.chat_message(entry["role"]):
         st.write(entry["content"])
 
+if "last_response_audio" not in st.session_state:
+    st.session_state.last_response_audio = None
+
+if st.session_state.last_response_audio:
+    st.audio(st.session_state.last_response_audio, autoplay=True)
+    # Xóa file sau khi đã thêm vào widget để tránh đầy bộ nhớ server
+    if os.path.exists(st.session_state.last_response_audio):
+        os.remove(st.session_state.last_response_audio)
+    # Reset state để không phát lại ở lần rerun tiếp theo
+    st.session_state.last_response_audio = None
+
 # BỘ ĐIỀU KHIỂN GHI ÂM
 # Sử dụng cột để sắp xếp các nút
 col1, col2 = st.columns(2)
-
+if "process_audio" not in st.session_state:
+    st.session_state.process_audio = False
 with col1:
     if not st.session_state.is_recording:
         if st.button("🎤 Bắt đầu nói"):
             st.session_state.is_recording = True
             st.rerun()
-    else:
-        if st.button("🛑 Dừng lại và Gửi"):
+     if st.button("🛑 Dừng lại và Gửi"):
             st.session_state.is_recording = False
-            st.rerun()
+            # Đặt cờ báo hiệu rằng cần xử lý âm thanh
+            st.session_state.process_audio = True 
 
 # LUỒNG XỬ LÝ 9
 if st.session_state.is_recording:
@@ -157,31 +169,44 @@ if st.session_state.is_recording:
     if webrtc_ctx.audio_processor:
         st.session_state.audio_frames = webrtc_ctx.audio_processor.frames
 
+else:
+    # Nếu không ghi âm, hiển thị thông báo
+    st.info("Nhấn 'Bắt đầu nói' để trò chuyện với tôi.")
+
+
 # Chỉ xử lý khi đã dừng ghi âm và có dữ liệu
-if not st.session_state.is_recording and st.session_state.audio_frames:
-    with st.spinner("Đang xử lý..."):
-        # 1. TAI: Chuyển giọng nói thành văn bản
-        sample_rate = 48000 # Tần số mẫu mặc định của webrtc
-        user_text = speech_to_text(st.session_state.audio_frames, sample_rate)
-        st.session_state.audio_frames = [] # Xóa dữ liệu cũ
+if st.session_state.process_audio:
+    if not st.session_state.audio_frames:
+        st.warning("Không ghi âm được gì cả. Vui lòng thử lại.")
+        st.session_state.process_audio = False # Reset cờ
+    else:
+        with st.spinner("Đang xử lý..."):
+            # Lấy dữ liệu âm thanh đã lưu
+            audio_frames_to_process = st.session_state.audio_frames.copy()
+            # Xóa dữ liệu cũ trong state ngay lập tức
+            st.session_state.audio_frames = [] 
+       
+        
+     # 1. TAI: Chuyển giọng nói thành văn bản
+            sample_rate = 48000
+            user_text = speech_to_text(audio_frames_to_process, sample_rate)
 
-        if user_text:
-            # Cập nhật lịch sử trò chuyện với lời của người dùng
-            st.session_state.conversation.append({"role": "user", "content": user_text})
-            
-            # 2. NÃO: Lấy câu trả lời từ AI
-            ai_response_text = get_ai_response(user_text, st.session_state.conversation)
-            
-            # Cập nhật lịch sử trò chuyện với lời của AI
-            st.session_state.conversation.append({"role": "assistant", "content": ai_response_text})
+            if user_text:
+                # Cập nhật lịch sử trò chuyện với lời của người dùng
+                st.session_state.conversation.append({"role": "user", "content": user_text})
+                
+                # 2. NÃO: Lấy câu trả lời từ AI
+                ai_response_text = get_ai_response(user_text, st.session_state.conversation, system_prompt)
+                
+                # Cập nhật lịch sử trò chuyện 
+                st.session_state.conversation.append({"role": "assistant", "content": ai_response_text})
 
-            # 3. MIỆNG: Chuyển câu trả lời của AI thành giọng nói và phát
-            audio_file = text_to_speech(ai_response_text)
-            if audio_file:
-                # Tự động phát âm thanh và xóa file
-                st.audio(audio_file, autoplay=True)
-                time.sleep(1) # Chờ một chút để chắc chắn st.audio đã load
-                os.remove(audio_file)
-            
-            # Tải lại trang để hiển thị cuộc hội thoại mới
-            st.rerun()
+                # 3. MIỆNG: Chuyển câu trả lời của AI thành giọng nói và phát
+                audio_file = text_to_speech(ai_response_text)
+                if audio_file:
+                    st.session_state.last_response_audio = audio_file # Lưu tên file để phát ở lần chạy sau
+
+        # Reset cờ xử lý sau khi đã xong
+        st.session_state.process_audio = False
+        # Tải lại trang MỘT LẦN DUY NHẤT sau khi đã xử lý xong
+        st.rerun()
