@@ -1,6 +1,6 @@
 streamlit
 streamlit-webrtc
-openai
+google-generativeai
 gTTS
 av
 numpy
