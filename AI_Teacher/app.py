@@ -1,4 +1,3 @@
-
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 import google.generativeai as genai
@@ -152,7 +151,7 @@ with col1:
         if st.button("🎤 Bắt đầu nói"):
             st.session_state.is_recording = True
             st.rerun()
-     if st.button("🛑 Dừng lại và Gửi"):
+    if st.button("🛑 Dừng lại và Gửi"):
             st.session_state.is_recording = False
             # Đặt cờ báo hiệu rằng cần xử lý âm thanh
             st.session_state.process_audio = True 
