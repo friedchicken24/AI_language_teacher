@@ -2,7 +2,7 @@
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 import google.generativeai as genai
-import google.cloud.speech as speech
+import assemblyai as aai
 from google.oauth2 import service_account
 import json
 import os
@@ -43,14 +43,11 @@ class AudioRecorder(AudioProcessorBase):
     def clear_frames(self):
         self._frames = []
 
-# Cấu hình client cho Google Cloud Speech-to-Text từ secrets
+# Cấu hình AssemblyAI
 try:
-    creds_json_str = st.secrets["GOOGLE_CREDENTIALS"]
-    creds_dict = json.loads(creds_json_str)
-    credentials = service_account.Credentials.from_service_account_info(creds_dict)
-    speech_client = speech.SpeechClient(credentials=credentials)
-except (KeyError, json.JSONDecodeError) as e:
-    st.error(f"⚠️ Lỗi cấu hình Google Cloud Speech API: {e}. Vui lòng kiểm tra GOOGLE_CREDENTIALS trong Secrets.")
+    aai.settings.api_key = st.secrets["ASSEMBLYAI_API_KEY"]
+except KeyError:
+    st.error("⚠️ Vui lòng thêm ASSEMBLYAI_API_KEY vào Secrets.")
     st.stop()
 
 # --- CÁC HÀM TIỆN ÍCH ---
@@ -67,33 +64,42 @@ def text_to_speech(text, lang='vi'):
 
 def speech_to_text(audio_data, sample_rate):
     try:
-        # Kết hợp các frame âm thanh
+        # Lưu file wav tạm thời
+        output_filename = f"input_{uuid.uuid4()}.wav"
         sound_chunk = np.concatenate(audio_data, axis=1)
-        audio_bytes = sound_chunk.tobytes()
+        # Viết header cho file WAV
+        with open(output_filename, "wb") as f:
+            f.write(b"RIFF")
+            f.write(b"\x00\x00\x00\x00")
+            f.write(b"WAVE")
+            f.write(b"fmt ")
+            f.write(b"\x10\x00\x00\x00")
+            f.write(b"\x01\x00\x01\x00")
+            f.write(sample_rate.to_bytes(4, "little"))
+            f.write((sample_rate * 2).to_bytes(4, "little"))
+            f.write(b"\x02\x00\x10\x00")
+            f.write(b"data")
+            f.write(len(sound_chunk.tobytes()).to_bytes(4, "little"))
+            f.write(sound_chunk.tobytes())
 
-        # Tạo đối tượng audio và config cho Google API
-        audio = speech.RecognitionAudio(content=audio_bytes)
-        config = speech.RecognitionConfig(
-            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-            sample_rate_hertz=sample_rate,
-            language_code="vi-VN"  # Chỉ định tiếng Việt
-        )
+        # Gửi đến AssemblyAI
+        transcriber = aai.Transcriber()
+        transcript = transcriber.transcribe(output_filename)
 
-        # Gửi yêu cầu đến Google
-        st.info("Đang gửi đến Google Speech API...")
-        response = speech_client.recognize(config=config, audio=audio)
-        
-        if response.results:
-            return response.results[0].alternatives[0].transcript
-        else:
+        os.remove(output_filename) # Xóa file tạm
+
+        if transcript.status == aai.TranscriptStatus.error:
+            st.error(f"Lỗi từ AssemblyAI: {transcript.error}")
             return None
+        else:
+            return transcript.text
     except Exception as e:
-        st.error(f"Lỗi khi nhận diện giọng nói qua Google: {e}")
+        st.error(f"Lỗi khi nhận diện giọng nói qua AssemblyAI: {e}")
         return None
         
 def get_ai_response(user_text, conversation_history):
     # Khởi tạo model Gemini
-    model = genai.GenerativeModel('gemini-1.5-flash-latest') # Dùng bản Flash cho tốc độ nhanh
+    model = genai.GenerativeModel('gemini-1.5-flash-latest') 
     
     gemini_history = []
     for entry in conversation_history:
@@ -112,7 +118,7 @@ def get_ai_response(user_text, conversation_history):
         st.error(f"Lỗi khi gọi Gemini: {e}")
         return "Tôi xin lỗi, tôi đang gặp sự cố với bộ não của mình."
 
-# --- KHỞI TẠO STATE CỦA ỨNG DỤNG ---
+# KHỞI TẠO STATE 
 if "conversation" not in st.session_state:
     st.session_state.conversation = []
 if "is_recording" not in st.session_state:
@@ -120,12 +126,12 @@ if "is_recording" not in st.session_state:
 if "audio_frames" not in st.session_state:
     st.session_state.audio_frames = []
 
-# Hiển thị lịch sử trò chuyện
+# lịch sử trò chuyện
 for entry in st.session_state.conversation:
     with st.chat_message(entry["role"]):
         st.write(entry["content"])
 
-# --- BỘ ĐIỀU KHIỂN GHI ÂM ---
+# BỘ ĐIỀU KHIỂN GHI ÂM
 # Sử dụng cột để sắp xếp các nút
 col1, col2 = st.columns(2)
 
@@ -139,7 +145,7 @@ with col1:
             st.session_state.is_recording = False
             st.rerun()
 
-# --- LUỒNG XỬ LÝ CHÍNH ---
+# LUỒNG XỬ LÝ 9
 if st.session_state.is_recording:
     st.info("🔴 Đang nghe... (Nhấn 'Dừng lại' khi bạn nói xong)")
     webrtc_ctx = webrtc_streamer(
