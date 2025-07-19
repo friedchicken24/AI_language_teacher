@@ -7,15 +7,15 @@ from gtts import gTTS
 import av
 import numpy as np
 import uuid
-import queue # Dùng để giao tiếp giữa các luồng
+import queue
+from io import BytesIO
+import wave
 
 # --- CẤU HÌNH BAN ĐẦU ---
-st.set_page_config(page_title="Trợ lý ảo", page_icon="🤖")
+st.set_page_config(page_title="Trợ lý ảo", page_icon="🤖", layout="wide")
 st.title("🤖 Trợ Lý Ảo Thông Minh")
-st.sidebar.title("Tùy Chọn Trợ Lý Ảo")
-st.sidebar.markdown("Chọn một 'cá tính' cho trợ lý ảo của chúng ta!")
 
-# Lấy API keys
+# --- CẤU HÌNH API KEYS VÀ CLIENTS ---
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
     aai.settings.api_key = st.secrets["ASSEMBLYAI_API_KEY"]
@@ -25,7 +25,6 @@ except KeyError as e:
 
 # --- CÁC HÀM TIỆN ÍCH (Không thay đổi) ---
 def text_to_speech(text, lang='vi'):
-    # ... (Giữ nguyên hàm này)
     try:
         tts = gTTS(text=text, lang=lang, slow=False)
         filename = f"response_{uuid.uuid4()}.mp3"
@@ -36,9 +35,8 @@ def text_to_speech(text, lang='vi'):
         return None
 
 def speech_to_text(wav_bytes):
-    # ... (Hàm này giờ nhận bytes thay vì list of frames)
     try:
-        config = aai.TranscriptionConfig(language_code="vi") # Thêm language_code
+        config = aai.TranscriptionConfig(language_code="vi")
         transcriber = aai.Transcriber(config=config)
         transcript = transcriber.transcribe(wav_bytes)
 
@@ -51,7 +49,6 @@ def speech_to_text(wav_bytes):
         return None
 
 def get_ai_response(user_text, conversation_history, system_prompt):
-    # ... (Giữ nguyên hàm này)
     model = genai.GenerativeModel('gemini-1.5-flash-latest')
     messages = [{"role": "system", "content": system_prompt}]
     gemini_history = []
@@ -66,116 +63,104 @@ def get_ai_response(user_text, conversation_history, system_prompt):
         st.error(f"Lỗi khi gọi Gemini: {e}")
         return "Tôi xin lỗi, tôi đang gặp sự cố với bộ não của mình."
 
-# --- CÁ TÍNH CỦA AI ---
-personas = {
-    "Trợ lý thân thiện": "Bạn là một trợ lý ảo tên là Zen...",
-    "Nhà sử học uyên bác": "Bạn là một nhà sử học uyên bác...",
-    "Chuyên gia công nghệ": "Bạn là một chuyên gia công nghệ hàng đầu..."
-}
-selected_persona_name = st.sidebar.selectbox("Chọn một vai trò:", options=list(personas.keys()))
-system_prompt = personas[selected_persona_name]
+# --- GIAO DIỆN VÀ LOGIC ---
+with st.sidebar:
+    st.title("Tùy Chọn Trợ Lý Ảo")
+    personas = {
+        "Trợ lý thân thiện": "Bạn là một trợ lý ảo tên là Zen...",
+        "Nhà sử học uyên bác": "Bạn là một nhà sử học uyên bác...",
+        "Chuyên gia công nghệ": "Bạn là một chuyên gia công nghệ hàng đầu..."
+    }
+    selected_persona_name = st.selectbox("Chọn một vai trò:", options=list(personas.keys()))
+    system_prompt = personas[selected_persona_name]
 
-# --- KHỞI TẠO STATE ---
+# Khởi tạo session state
 if "conversation" not in st.session_state:
     st.session_state.conversation = []
 if "last_response_audio" not in st.session_state:
     st.session_state.last_response_audio = None
-if "audio_bytes" not in st.session_state:
-    st.session_state.audio_bytes = None
-
-# --- GIAO DIỆN CHÍNH ---
-st.write("---")
+if "audio_buffer" not in st.session_state:
+    st.session_state.audio_buffer = queue.Queue()
 
 # Hiển thị lịch sử trò chuyện
-for entry in st.session_state.conversation:
-    with st.chat_message(entry["role"]):
-        st.write(entry["content"])
+chat_container = st.container()
+with chat_container:
+    for entry in st.session_state.conversation:
+        with st.chat_message(entry["role"]):
+            st.write(entry["content"])
 
-# Tự động phát âm thanh nếu có
+# Tự động phát âm thanh
 if st.session_state.last_response_audio:
     st.audio(st.session_state.last_response_audio, autoplay=True)
     if os.path.exists(st.session_state.last_response_audio):
         os.remove(st.session_state.last_response_audio)
     st.session_state.last_response_audio = None
 
-# Component ghi âm và xử lý
-# Sử dụng queue để nhận dữ liệu audio từ một luồng khác
-audio_frames_queue = queue.Queue()
+# Component ghi âm
+st.write("---")
+col1, col2 = st.columns([1, 1])
 
-def audio_frame_callback(frame: av.AudioFrame):
-    audio_frames_queue.put(frame.to_ndarray())
+with col1:
+    st.subheader("Bảng điều khiển")
+    # Sử dụng callback để ghi âm
+    def audio_frame_callback(frame: av.AudioFrame):
+        st.session_state.audio_buffer.put(frame.to_ndarray())
 
-st.write("Nhấn 'Start' để bắt đầu ghi âm, 'Stop' để gửi.")
-webrtc_ctx = webrtc_streamer(
-    key="speech-to-text",
-    mode=WebRtcMode.SENDONLY,
-    audio_frame_callback=audio_frame_callback,
-    media_stream_constraints={"video": False, "audio": True},
-    rtc_configuration=RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
-)
+    webrtc_ctx = webrtc_streamer(
+        key="recorder",
+        mode=WebRtcMode.SENDONLY,
+        audio_frame_callback=audio_frame_callback,
+        media_stream_constraints={"video": False, "audio": True},
+        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    )
 
-# Nút xử lý logic
-if st.button("Xử lý giọng nói vừa ghi"):
-    if not webrtc_ctx.state.playing:
-        st.warning("Vui lòng nhấn 'Start' và ghi âm trước khi xử lý.")
+with col2:
+    st.subheader("Trạng thái")
+    if webrtc_ctx.state.playing:
+        st.success("🔴 Micro đang bật. Hãy nói đi!")
+        if st.button("Dừng và gửi"):
+            # Lấy dữ liệu từ queue
+            frames = []
+            while not st.session_state.audio_buffer.empty():
+                frames.append(st.session_state.audio_buffer.get())
+
+            if not frames:
+                st.warning("Không có âm thanh nào được ghi lại. Vui lòng nói gần micro hơn.")
+            else:
+                st.info("Đã nhận được âm thanh. Đang xử lý...")
+                
+                # Ghép các frame và tạo file wav trong bộ nhớ
+                sound_chunk = np.concatenate(frames, axis=1)
+                sound_chunk = (sound_chunk * 32767).astype(np.int16)
+                
+                wav_buffer = BytesIO()
+                with wave.open(wav_buffer, "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(48000)
+                    wf.writeframes(sound_chunk.tobytes())
+                
+                wav_bytes = wav_buffer.getvalue()
+
+                # ---- BẮT ĐẦU LUỒNG XỬ LÝ ----
+                with st.spinner("AI đang lắng nghe..."):
+                    user_text = speech_to_text(wav_bytes)
+
+                if user_text:
+                    st.session_state.conversation.append({"role": "user", "content": user_text})
+                    with st.spinner("AI đang suy nghĩ..."):
+                        ai_response_text = get_ai_response(user_text, st.session_state.conversation, system_prompt)
+                    
+                    st.session_state.conversation.append({"role": "assistant", "content": ai_response_text})
+                    
+                    with st.spinner("AI đang chuẩn bị nói..."):
+                        audio_file = text_to_speech(ai_response_text)
+                    
+                    if audio_file:
+                        st.session_state.last_response_audio = audio_file
+                    
+                    st.rerun()
+                else:
+                    st.error("Không nhận diện được giọng nói. Hãy thử nói to và rõ hơn.")
     else:
-        st.info("Đang xử lý...")
-        
-        # Lấy tất cả các frame từ queue
-        audio_frames = []
-        while not audio_frames_queue.empty():
-            audio_frames.append(audio_frames_queue.get())
-        
-        if not audio_frames:
-            st.warning("Không ghi âm được gì cả. Vui lòng nói vào micro.")
-        else:
-            # Ghép các frame lại và tạo file wav
-            sample_rate = 48000
-            sound_chunk = np.concatenate(audio_frames, axis=1)
-            
-            # Chuyển đổi sang định dạng 16-bit integer
-            sound_chunk = (sound_chunk * 32767).astype(np.int16)
-
-            # Tạo file wav trong bộ nhớ
-            from io import BytesIO
-            import wave
-
-            wav_buffer = BytesIO()
-            with wave.open(wav_buffer, "wb") as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2) # 16-bit
-                wf.setframerate(sample_rate)
-                wf.writeframes(sound_chunk.tobytes())
-            
-            st.session_state.audio_bytes = wav_buffer.getvalue()
-
-            # Tải lại trang để bắt đầu chuỗi phản hồi
-            st.rerun()
-
-# --- LUỒNG PHẢN HỒI ---
-if st.session_state.audio_bytes:
-    with st.spinner("AI đang lắng nghe và suy nghĩ..."):
-        # Lấy và xóa dữ liệu audio
-        audio_to_process = st.session_state.audio_bytes
-        st.session_state.audio_bytes = None
-
-        # 1. TAI: Chuyển giọng nói thành văn bản
-        user_text = speech_to_text(audio_to_process)
-        
-        if user_text:
-            st.session_state.conversation.append({"role": "user", "content": user_text})
-            
-            # 2. NÃO: Lấy câu trả lời
-            ai_response_text = get_ai_response(user_text, st.session_state.conversation, system_prompt)
-            st.session_state.conversation.append({"role": "assistant", "content": ai_response_text})
-
-            # 3. MIỆNG: Tạo file âm thanh
-            audio_file = text_to_speech(ai_response_text)
-            if audio_file:
-                st.session_state.last_response_audio = audio_file
-            
-            # Tải lại lần cuối để hiển thị kết quả và phát âm thanh
-            st.rerun()
-        else:
-            st.error("Không thể nhận diện giọng nói. Vui lòng thử lại.")
-            st.rerun() # Tải lại để xóa spinner
+        st.info("Nhấn 'Start' trên khung đen để cấp quyền và bắt đầu ghi âm.")
