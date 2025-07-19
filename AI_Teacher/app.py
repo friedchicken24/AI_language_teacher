@@ -1,7 +1,7 @@
 
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
-import openai
+import google.generativeai as genai
 import os
 from gtts import gTTS
 import av
@@ -16,9 +16,10 @@ st.write("Nói chuyện với tôi nhé! Tôi đang lắng nghe...")
 
 # Lấy API key
 try:
-    openai.api_key = st.secrets["OPENAI_API_KEY"]
+    # Thay đổi tên secret để phù hợp với Google
+    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 except KeyError:
-    st.error("⚠️ Vui lòng thêm OpenAI API key vào Secrets của ứng dụng.")
+    st.error("⚠️ Vui lòng thêm GOOGLE_API_KEY vào Secrets của ứng dụng.")
     st.stop()
 
 # --- LỚP XỬ LÝ ÂM THANH ---
@@ -78,17 +79,25 @@ def speech_to_text(audio_data, sample_rate):
         return None
         
 def get_ai_response(user_text, conversation_history):
-    messages = [{"role": "system", "content": "Bạn là một trợ lý ảo thân thiện, thông minh và nói chuyện bằng tiếng Việt. Hãy trả lời ngắn gọn và tự nhiên."}]
-    messages.extend(conversation_history)
-    messages.append({"role": "user", "content": user_text})
+    # Khởi tạo model Gemini
+    model = genai.GenerativeModel('gemini-1.5-flash-latest') # Dùng bản Flash cho tốc độ nhanh
+    
+     gemini_history = []
+    for entry in conversation_history:
+        # Gemini dùng 'model' cho vai trò của AI
+        role = 'model' if entry['role'] == 'assistant' else entry['role']
+        gemini_history.append({'role': role, 'parts': [entry['content']]})
+
+    # Bắt đầu một phiên chat với lịch sử cũ
+    chat = model.start_chat(history=gemini_history)
     
     try:
-        response = openai.chat.completions.create(model="gpt-4o", messages=messages)
-        ai_text = response.choices[0].message.content
-        return ai_text
+        # Gửi tin nhắn mới của người dùng
+        response = chat.send_message(user_text)
+        return response.text
     except Exception as e:
-        st.error(f"Lỗi khi gọi GPT: {e}")
-        return "Tôi xin lỗi, tôi đang gặp sự cố."
+        st.error(f"Lỗi khi gọi Gemini: {e}")
+        return "Tôi xin lỗi, tôi đang gặp sự cố với bộ não của mình."
 
 # --- KHỞI TẠO STATE CỦA ỨNG DỤNG ---
 if "conversation" not in st.session_state:
