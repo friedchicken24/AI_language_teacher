@@ -1,6 +1,0 @@
-streamlit
-google-generativeai
-assemblyai
-gTTS
-numpy
-librosa
